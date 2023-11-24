@@ -14,7 +14,9 @@
 /* Create an empty queue */
 struct list_head *q_new()
 {
-    return NULL;
+    struct list_head *new = list_head();
+
+    return new;
 }
 
 /* Free all storage used by queue */
