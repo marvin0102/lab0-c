@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "ttest.h"
 
@@ -45,5 +46,7 @@ void t_init(t_context_t *ctx)
         ctx->m2[class] = 0.0;
         ctx->n[class] = 0.0;
     }
+    ctx->percentiles =
+        (int64_t *) calloc(DUDECT_NUMBER_PERCENTILES, sizeof(int64_t));
     return;
 }

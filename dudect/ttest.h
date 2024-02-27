@@ -2,11 +2,13 @@
 #define DUDECT_TTEST_H
 
 #include <stdint.h>
+#define DUDECT_NUMBER_PERCENTILES (100)
 
 typedef struct {
     double mean[2];
     double m2[2];
     double n[2];
+    int64_t *percentiles;
 } t_context_t;
 
 void t_push(t_context_t *ctx, double x, uint8_t class);
