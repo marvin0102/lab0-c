@@ -23,6 +23,7 @@
 #include "list.h"
 #include "random.h"
 
+
 /* Shannon entropy */
 extern double shannon_entropy(const uint8_t *input_data);
 extern int show_entropy;
@@ -45,6 +46,8 @@ extern int show_entropy;
 #include "queue.h"
 
 #include "console.h"
+#include "dudect/cpucycles.h"
+#include "list_sort.h"
 #include "report.h"
 
 /* Settable parameters */
@@ -74,6 +77,8 @@ static int fail_count = 0;
 static int string_length = MAXSTRING;
 
 static int descend = 0;
+
+static int linuxsort = 0;
 
 #define MIN_RANDSTR_LEN 5
 #define MAX_RANDSTR_LEN 10
@@ -579,8 +584,15 @@ static bool do_size(int argc, char *argv[])
     return ok && !error_check();
 }
 
+int cmp(void *priv, const struct list_head *a, const struct list_head *b)
+{
+    return strcmp(list_entry(a, element_t, list)->value,
+                  list_entry(b, element_t, list)->value);
+}
+
 bool do_sort(int argc, char *argv[])
 {
+    int64_t before_ticks, after_ticks;
     if (argc != 1) {
         report(1, "%s takes no arguments", argv[0]);
         return false;
@@ -598,8 +610,15 @@ bool do_sort(int argc, char *argv[])
     error_check();
 
     set_noallocate_mode(true);
-    if (current && exception_setup(true))
-        q_sort(current->q, descend);
+    if (current && exception_setup(true)) {
+        before_ticks = cpucycles();
+        linuxsort ? list_sort(NULL, current->q, &cmp)
+                  : q_sort(current->q, descend);
+        after_ticks = cpucycles();
+        report_noreturn(0, "cpucycles : %d", after_ticks - before_ticks);
+        report_noreturn(0, "\n");
+    }
+
     exception_cancel();
     set_noallocate_mode(false);
 
@@ -1060,6 +1079,7 @@ static void console_init()
               "Number of times allow queue operations to return false", NULL);
     add_param("descend", &descend,
               "Sort and merge queue in ascending/descending order", NULL);
+    add_param("linuxsort", &linuxsort, "chose q_sort or list_sort", NULL);
 }
 
 /* Signal handlers */
