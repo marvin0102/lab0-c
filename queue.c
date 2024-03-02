@@ -61,8 +61,6 @@ bool q_insert_head(struct list_head *head, char *s)
 /* Insert an element at tail of queue */
 bool q_insert_tail(struct list_head *head, char *s)
 {
-    if (!head)
-        return false;
     return q_insert_head(head->prev, s);
 }
 
@@ -85,8 +83,6 @@ element_t *q_remove_head(struct list_head *head, char *sp, size_t bufsize)
 /* Remove an element from tail of queue */
 element_t *q_remove_tail(struct list_head *head, char *sp, size_t bufsize)
 {
-    if (!head || list_empty(head))
-        return NULL;
     return q_remove_head(head->prev->prev, sp, bufsize);
 }
 
@@ -270,9 +266,7 @@ void q_sort(struct list_head *head, bool descend)
     head->prev = node;
 }
 
-/* Remove every node which has a node with a strictly less value anywhere to
- * the right side of it */
-int q_ascend(struct list_head *head)
+int descend_ascend(struct list_head *head, bool ascend)
 {
     // https://leetcode.com/problems/remove-nodes-from-linked-list/
     if (!head || list_empty(head))
@@ -285,7 +279,8 @@ int q_ascend(struct list_head *head)
         entry = list_entry(node, element_t, list);
         safe_entry = list_entry(safe, element_t, list);
         while (node != head &&
-               strcmp((entry->value), (safe_entry->value)) > 0) {
+               (ascend ? (strcmp((entry->value), (safe_entry->value)) > 0)
+                       : (strcmp((entry->value), (safe_entry->value)) < 0))) {
             list_del(node);
             q_release_element(entry);
             node = safe->prev;
@@ -296,31 +291,20 @@ int q_ascend(struct list_head *head)
     return q_size(head);
 }
 
+/* Remove every node which has a node with a strictly less value anywhere to
+ * the right side of it */
+int q_ascend(struct list_head *head)
+{
+    // https://leetcode.com/problems/remove-nodes-from-linked-list/
+    return descend_ascend(head, true);
+}
+
 /* Remove every node which has a node with a strictly greater value anywhere to
  * the right side of it */
 int q_descend(struct list_head *head)
 {
     // https://leetcode.com/problems/remove-nodes-from-linked-list/
-    if (!head || list_empty(head))
-        return 0;
-    if (list_is_singular(head))
-        return 1;
-    struct list_head *node = head->next, *safe = node->next;
-    for (; safe != head; node = safe, safe = node->next) {
-        element_t *entry, *safe_entry;
-        entry = list_entry(node, element_t, list);
-        safe_entry = list_entry(safe, element_t, list);
-        while (node != head &&
-               strcmp((entry->value), (safe_entry->value)) < 0) {
-            list_del(node);
-            q_release_element(entry);
-            node = safe->prev;
-            if (node == head)
-                break;
-            entry = list_entry(node, element_t, list);
-        }
-    }
-    return q_size(head);
+    return descend_ascend(head, false);
 }
 
 /* Merge all the queues into one sorted queue, which is in ascending/descending

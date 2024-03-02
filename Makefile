@@ -57,7 +57,7 @@ check: qtest
 	./$< -v 3 -f traces/trace-eg.cmd
 
 debug: qtest
-	./$< -v 3 -f traces/trace-sort-diff.cmd
+	./$< -v 3 -f traces/trace-06-ops.cmd
 
 test: qtest scripts/driver.py
 	scripts/driver.py -c
