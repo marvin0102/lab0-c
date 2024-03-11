@@ -590,6 +590,63 @@ int cmp(void *priv, const struct list_head *a, const struct list_head *b)
                   list_entry(b, element_t, list)->value);
 }
 
+bool do_Timsort(int argc, char *argv[])
+{
+    int64_t before_ticks, after_ticks;
+    if (argc != 1) {
+        report(1, "%s takes no arguments", argv[0]);
+        return false;
+    }
+
+    int cnt = 0;
+    if (!current || !current->q)
+        report(3, "Warning: Calling sort on null queue");
+    else
+        cnt = q_size(current->q);
+    error_check();
+
+    if (cnt < 2)
+        report(3, "Warning: Calling sort on single node");
+    error_check();
+    int count = 0;
+    set_noallocate_mode(true);
+    if (current && exception_setup(true)) {
+        before_ticks = cpucycles();
+        timsort(&count, current->q, &cmp);
+        after_ticks = cpucycles();
+        report_noreturn(0, "cpucycles : %d", after_ticks - before_ticks);
+        report_noreturn(0, "\n");
+    }
+
+    exception_cancel();
+    set_noallocate_mode(false);
+
+    bool ok = true;
+    if (current && current->size) {
+        for (struct list_head *cur_l = current->q->next;
+             cur_l != current->q && --cnt; cur_l = cur_l->next) {
+            /* Ensure each element in ascending/descending order */
+            element_t *item, *next_item;
+            item = list_entry(cur_l, element_t, list);
+            next_item = list_entry(cur_l->next, element_t, list);
+            if (!descend && strcmp(item->value, next_item->value) > 0) {
+                report(1, "ERROR: Not sorted in ascending order");
+                ok = false;
+                break;
+            }
+
+            if (descend && strcmp(item->value, next_item->value) < 0) {
+                report(1, "ERROR: Not sorted in descending order");
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    q_show(3);
+    return ok && !error_check();
+}
+
 bool do_sort(int argc, char *argv[])
 {
     int64_t before_ticks, after_ticks;
@@ -1074,6 +1131,7 @@ static void console_init()
         "[str]");
     ADD_COMMAND(reverse, "Reverse queue", "");
     ADD_COMMAND(sort, "Sort queue in ascending/descening order", "");
+    ADD_COMMAND(Timsort, "Sort queue with Tim sort", "");
     ADD_COMMAND(size, "Compute queue size n times (default: n == 1)", "[n]");
     ADD_COMMAND(show, "Show queue contents", "");
     ADD_COMMAND(dm, "Delete middle node in queue", "");
