@@ -43,11 +43,11 @@ extern int show_entropy;
  * OK as long as head field of queue_t structure is in first position in
  * solution code
  */
-#include "queue.h"
-
 #include "console.h"
 #include "dudect/cpucycles.h"
 #include "list_sort.h"
+#include "queue.h"
+#include "queue_addition.h"
 #include "report.h"
 
 /* Settable parameters */
@@ -1031,23 +1031,24 @@ static bool do_next(int argc, char *argv[])
     return q_show(0);
 }
 
-// static bool do_shuffle(int argc, char *argv[])
-// {
-//     int len = q_size(current->q), rindex;
-//     struct list_head *head = current->q, *node, *prev;
-//     while(len>0){
-//         rindex = rand() % (len);
-//         node = head->next;
-//         for(int i=0 ; i<rindex ; i++){
-//             node = node->next;
-//         }
-//         prev = node->prev;
-//         list_move(head->prev, prev);
-//         list_move(node,head->prev);
-//         len--;
-//     }
-//     return q_show(0);
-// }
+static bool do_shuffle(int argc, char *argv[])
+{
+    if (argc != 1) {
+        report(1, "%s takes no arguments", argv[0]);
+        return false;
+    }
+
+    bool ok = true;
+    set_noallocate_mode(true);
+    if (current && exception_setup(true))
+        ok = q_shuffle(current->q);
+    exception_cancel();
+    set_noallocate_mode(false);
+
+
+    q_show(3);
+    return ok;
+}
 
 static void console_init()
 {
@@ -1089,8 +1090,7 @@ static void console_init()
                 "");
     ADD_COMMAND(reverseK, "Reverse the nodes of the queue 'K' at a time",
                 "[K]");
-    // ADD_COMMAND(shuffle, "shuffle the queue",
-    //             "");
+    ADD_COMMAND(shuffle, "shuffle the queue", "");
     add_param("length", &string_length, "Maximum length of displayed string",
               NULL);
     add_param("malloc", &fail_probability, "Malloc failure probability percent",

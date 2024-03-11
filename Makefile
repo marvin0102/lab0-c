@@ -40,7 +40,7 @@ $(GIT_HOOKS):
 OBJS := qtest.o report.o console.o harness.o queue.o \
         random.o dudect/constant.o dudect/fixture.o dudect/ttest.o \
         shannon_entropy.o \
-        linenoise.o web.o list_sort.o
+        linenoise.o web.o list_sort.o queue_addition.o
 
 deps := $(OBJS:%.o=.%.o.d)
 
@@ -57,10 +57,13 @@ check: qtest
 	./$< -v 3 -f traces/trace-eg.cmd
 
 debug: qtest
-	./$< -v 3 -f traces/trace-06-ops.cmd
+	./$< -v 3 -f traces/trace-shuffle.cmd
 
 test: qtest scripts/driver.py
 	scripts/driver.py -c
+
+shuffle: qtest scripts/shuffle.py
+	scripts/shuffle.py -c
 
 valgrind_existence:
 	@which valgrind 2>&1 > /dev/null || (echo "FATAL: valgrind not found"; exit 1)
