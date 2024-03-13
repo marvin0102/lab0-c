@@ -54,7 +54,7 @@ static struct list_head *merge_Galloping(void *priv,
                                          struct list_head *a,
                                          struct list_head *b)
 {
-    struct list_head *head;
+    struct list_head *head = NULL;
     struct list_head **tail = &head;
 
     for (;;) {
