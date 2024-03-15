@@ -28,9 +28,8 @@ void q_free(struct list_head *l)
         return;
     element_t *entry, *safe;
     list_for_each_entry_safe (entry, safe, l, list) {
-        if (entry->value)
-            free(entry->value);
-        free(entry);
+        list_del(&entry->list);
+        q_release_element(entry);
     }
     free(l);
 }
@@ -274,21 +273,22 @@ int descend_ascend(struct list_head *head, bool ascend)
         return 0;
     if (list_is_singular(head))
         return 1;
-    struct list_head *node = head->next, *safe = node->next;
-    for (; safe != head; node = safe, safe = node->next) {
-        element_t *entry, *safe_entry;
-        entry = list_entry(node, element_t, list);
-        safe_entry = list_entry(safe, element_t, list);
-        while (node != head &&
-               (ascend ? (strcmp((entry->value), (safe_entry->value)) > 0)
-                       : (strcmp((entry->value), (safe_entry->value)) < 0))) {
-            list_del(node);
-            q_release_element(entry);
-            node = safe->prev;
-            if (node != head)
-                entry = list_entry(node, element_t, list);
+
+    struct list_head *this = ascend ? head->next : head->prev;
+    struct list_head *compare = ascend ? this->next : this->prev;
+
+    while (compare != head) {
+        element_t *entry1 = list_entry(this, element_t, list);
+        element_t *entry2 = list_entry(compare, element_t, list);
+        if (strcmp(entry1->value, entry2->value) < 0) {
+            this = ascend ? this->next : this->prev;
+        } else {
+            list_del(&entry2->list);
+            q_release_element(entry2);
         }
+        compare = ascend ? this->next : this->prev;
     }
+
     return q_size(head);
 }
 
