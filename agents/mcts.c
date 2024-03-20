@@ -17,7 +17,7 @@ struct node {
     int move;
     char player;
     int n_visits;
-    Q15_16 score;
+    Q23_8 score;
     struct node *parent;
     struct node *children[N_GRIDS];
 };
@@ -42,13 +42,13 @@ static void free_node(struct node *node)
     free(node);
 }
 
-Q15_16 fixed_sqrt(Q15_16 x)
+Q23_8 fixed_sqrt(Q23_8 x)
 {
     if (x <= 1 << Q) /* Assume x is always positive */
         return x;
 
-    Q15_16 z = 0;
-    for (Q15_16 m = 1UL << ((31 - __builtin_clz(x)) & ~1UL); m; m >>= 2) {
+    Q23_8 z = 0;
+    for (Q23_8 m = 1UL << ((31 - __builtin_clz(x)) & ~1UL); m; m >>= 2) {
         int b = z + m;
         z >>= 1;
         if (x >= b)
@@ -58,50 +58,73 @@ Q15_16 fixed_sqrt(Q15_16 x)
     return z;
 }
 
-
-Q15_16 fixed_log(int input)
+Q23_8 fixed_div(Q23_8 a, Q23_8 b)
 {
-    if (!input || input == (1U << Q))
-        return 0;
-
-    int64_t y = input << Q;  // int to Q15_16
-    y = ((y - (1U << Q)) << (Q)) / (y + (1U << Q));
-    int64_t ans = 0U;
-    for (unsigned i = 1; i < 20; i += 2) {
-        int64_t z = (1U << Q);
-        for (int j = 0; j < i; j++) {
-            z *= y;
-            z >>= Q;
-        }
-        z <<= Q;
-        z /= (i << Q);
-
-        ans += z;
+    /* pre-multiply by the base (Upscale to Q16 so that the result will be in Q8
+     * format) */
+    int64_t temp = (int64_t) a << Q;
+    /* Rounding: mid values are rounded up (down for negative values). */
+    /* OR compare most significant bits i.e. if (((temp >> 31) & 1) == ((b >>
+     * 15) & 1)) */
+    if ((temp >= 0 && b >= 0) || (temp < 0 && b < 0)) {
+        temp += b / 2; /* OR shift 1 bit i.e. temp += (b >> 1); */
+    } else {
+        temp -= b / 2; /* OR shift 1 bit i.e. temp -= (b >> 1); */
     }
-    ans <<= 1;
-    return (Q15_16) ans;
+    return (Q23_8) (temp / b);
 }
 
-static inline Q15_16 uct_score(int n_total, int n_visits, Q15_16 score)
+Q23_8 fixed_log(int input)
+{
+    if (!input || input == 1)
+        return 0;
+
+    Q23_8 y = input << Q;  // int to Q15_16
+    Q23_8 L = 1L << ((31 - __builtin_clz(y))), R = L << 1;
+    Q23_8 Llog = (31 - __builtin_clz(y) - Q) << Q, Rlog = Llog + (1 << Q), log;
+
+    for (int i = 1; i < 20; i++) {
+        if (y == L)
+            return Llog;
+        else if (y == R)
+            return Rlog;
+        log = fixed_div(Llog + Rlog, 2 << Q);
+
+        int64_t tmp = ((int64_t) L * (int64_t) R) >> Q;
+        tmp = fixed_sqrt((Q23_8) tmp);
+
+        if (y >= tmp) {
+            L = tmp;
+            Llog = log;
+        } else {
+            R = tmp;
+            Rlog = log;
+        }
+    }
+
+    return (Q23_8) log;
+}
+
+static inline Q23_8 uct_score(int n_total, int n_visits, Q23_8 score)
 {
     if (n_visits == 0)
         return INT32_MAX;
-    Q15_16 result = score << Q / (Q15_16) (n_visits << Q);
-    int64_t tmp =
-        EXPLORATION_FACTOR * fixed_sqrt(fixed_log(n_total) / n_visits);
-    Q15_16 resultN = tmp >> Q;
+    Q23_8 result = score << Q / (Q23_8) (n_visits << Q);
+    int64_t tmp = (int64_t) EXPLORATION_FACTOR *
+                  (int64_t) fixed_sqrt(fixed_log(n_total) / n_visits);
+    Q23_8 resultN = tmp >> Q;
     return result + resultN;
 }
 
 static struct node *select_move(struct node *node)
 {
     struct node *best_node = NULL;
-    Q15_16 best_score = INT2Q(-1);
+    Q23_8 best_score = 0;
     for (int i = 0; i < N_GRIDS; i++) {
         if (!node->children[i])
             continue;
-        Q15_16 score = uct_score(node->n_visits, node->children[i]->n_visits,
-                                 node->children[i]->score);
+        Q23_8 score = uct_score(node->n_visits, node->children[i]->n_visits,
+                                node->children[i]->score);
         if (score > best_score) {
             best_score = score;
             best_node = node->children[i];
@@ -110,7 +133,7 @@ static struct node *select_move(struct node *node)
     return best_node;
 }
 
-static Q15_16 simulate(char *table, char player)
+static Q23_8 simulate(char *table, char player)
 {
     char current_player = player;
     char temp_table[N_GRIDS];
@@ -135,7 +158,7 @@ static Q15_16 simulate(char *table, char player)
     return 0.5;
 }
 
-static void backpropagate(struct node *node, Q15_16 score)
+static void backpropagate(struct node *node, Q23_8 score)
 {
     while (node) {
         node->n_visits++;
@@ -167,13 +190,13 @@ int mcts(char *table, char player)
         memcpy(temp_table, table, N_GRIDS);
         while (1) {
             if ((win = check_win(temp_table)) != ' ') {
-                Q15_16 score =
+                Q23_8 score =
                     calculate_win_value(win, node->player ^ 'O' ^ 'X');
                 backpropagate(node, score);
                 break;
             }
             if (node->n_visits == 0) {
-                Q15_16 score = simulate(temp_table, node->player);
+                Q23_8 score = simulate(temp_table, node->player);
                 backpropagate(node, score);
                 break;
             }
