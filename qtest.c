@@ -12,6 +12,7 @@
 #include <strings.h> /* strcasecmp */
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -96,6 +97,7 @@ typedef enum {
 /* tictactoe game setting*/
 #include "agents/mcts.h"
 #include "agents/negamax.h"
+#include "corutine.h"
 #include "game.h"
 static int move_record[N_GRIDS];
 static int move_count = 0;
@@ -1120,12 +1122,12 @@ static bool do_shuffle(int argc, char *argv[])
 }
 
 /* tictactoe game functions*/
-static void record_move(int move)
+void record_move(int move)
 {
     move_record[move_count++] = move;
 }
 
-static void print_moves()
+void print_moves()
 {
     printf("Moves: ");
     for (int i = 0; i < move_count; i++) {
@@ -1138,7 +1140,7 @@ static void print_moves()
     printf("\n");
 }
 
-static int get_input(char player)
+int get_input(char player)
 {
     char *line = NULL;
     size_t line_length = 0;
@@ -1197,6 +1199,173 @@ static int get_input(char player)
     return GET_INDEX(y, x);
 }
 
+struct termios orig_termios;
+
+void disableRawMode()
+{
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+void enableRawMode()
+{
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disableRawMode);
+    struct termios raw = orig_termios;
+    raw.c_iflag &= ~(IXON);
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_lflag &= ~(ECHO);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 1;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void die(const char *s)
+{
+    perror(s);
+    exit(1);
+}
+
+char editorReadKey()
+{
+    // enableRawMode();
+    // int nread;
+    char c;
+    while (read(STDIN_FILENO, &c, 1) != -1) {
+        // if (nread == -1 && errno != EAGAIN) die("read");
+    }
+    // disableRawMode();
+    return c;
+}
+
+#define MAX_ROUND 10
+int move_records[MAX_ROUND][N_GRIDS];
+int move_counts[MAX_ROUND];
+static bool display_board = true;
+static bool stop_game = false;
+
+void mcts_task(void *arg)
+{
+    char *table = ((struct arg *) arg)->table;
+    char player = ((struct arg *) arg)->player;
+    preempt_disable();
+    int move = mcts(table, player);
+    if (move != -1) {
+        table[move] = player;
+        record_move(move);
+    }
+    preempt_enable();
+
+    preempt_disable();
+    if (display_board)
+        draw_board(table);
+    preempt_enable();
+}
+
+void negmax_task(void *arg)
+{
+    char *table = ((struct arg *) arg)->table;
+    char player = ((struct arg *) arg)->player;
+
+    preempt_disable();
+    int move = negamax_predict(table, player).move;
+    if (move != -1) {
+        table[move] = player;
+        record_move(move);
+    }
+    preempt_enable();
+
+    preempt_disable();
+    if (display_board)
+        draw_board(table);
+    preempt_enable();
+}
+
+void keyboard_task()
+{
+    char c;
+
+    preempt_disable();
+    c = editorReadKey();
+
+    switch (c) {
+    case (16):
+        display_board ^= true;
+        break;
+    case (17):
+        stop_game = true;
+        break;
+    }
+    preempt_enable();
+}
+
+static void ai_game(char *table)
+{
+    /* Enable raw mode in terminal and non-blocking read */
+    display_board = true;
+    stop_game = false;
+    memset(move_record, 0, sizeof(move_record));
+    move_count = 0;
+
+    enableRawMode();
+
+    int round = 0;
+    for (int i = 0; !stop_game && i < MAX_ROUND; i++) {
+        coro_timer_init();
+        task_init();
+
+        struct arg mcts_arg = {.table = table, .player = 'X'};
+
+        struct arg negamax_arg = {.table = table, .player = 'O'};
+
+        preempt_disable();
+        coro_timer_create(10000);
+
+        char win = check_win(table);
+        while (win == ' ') {
+            task_add(mcts_task, &mcts_arg);
+            task_add(keyboard_task, "");
+            task_add(negmax_task, &negamax_arg);
+            task_add(keyboard_task, "");
+
+            while (!list_empty(&task_main.list) || !list_empty(&task_reap)) {
+                preempt_enable();
+                coro_timer_wait();
+                preempt_disable();
+            }
+            win = check_win(table);
+        }
+
+        if (win == 'D')
+            printf("It's a draw!\n");
+        else
+            printf("%c won!\n", win);
+
+        preempt_enable();
+        coro_timer_cancel();
+
+        memset(table, ' ', N_GRIDS);
+        memcpy(move_records[i], move_record, sizeof(move_record));
+        memset(move_record, 0, sizeof(move_record));
+        move_counts[i] = move_count;
+        move_count = 0;
+        round = i;
+    }
+
+    disableRawMode();
+
+    /* Show all the moves */
+    for (int j = 0; j < round; j++) {
+        printf("Moves: ");
+        for (int i = 0; i < move_counts[j]; i++) {
+            printf("%c%d", 'A' + GET_COL(move_records[j][i]),
+                   1 + GET_ROW(move_records[j][i]));
+            if (i < move_counts[j] - 1) {
+                printf(" -> ");
+            }
+        }
+        printf("\n");
+    }
+}
+
 static bool do_ttt()
 {
     bool ok = true;
@@ -1205,31 +1374,31 @@ static bool do_ttt()
     memset(table, ' ', N_GRIDS);
     char turn = 'X';
     char ai = 'O';
-
-    negamax_init();
-
-    while (1) {
-        char win = check_win(table);
-        if (win == 'D') {
-            draw_board(table);
-            printf("It is a draw!\n");
-            break;
-        } else if (win != ' ') {
-            draw_board(table);
-            printf("%c won!\n", win);
-            break;
-        }
-
-        if (turn == ai) {
-            int move = mcts(table, ai);
-            if (move != -1) {
-                table[move] = ai;
-                record_move(move);
+    if (mtom) {
+        negamax_init();
+        ai_game(table);
+    } else {
+        while (1) {
+            char win = check_win(table);
+            if (win == 'D') {
+                draw_board(table);
+                printf("It is a draw!\n");
+                break;
+            } else if (win != ' ') {
+                draw_board(table);
+                printf("%c won!\n", win);
+                break;
             }
 
-        } else {
-            int move;
-            if (!mtom) {
+            if (turn == ai) {
+                int move = mcts(table, ai);
+                if (move != -1) {
+                    table[move] = ai;
+                    record_move(move);
+                }
+
+            } else {
+                int move;
                 draw_board(table);
                 while (1) {
                     move = get_input(turn);
@@ -1240,17 +1409,11 @@ static bool do_ttt()
                 }
                 table[move] = turn;
                 record_move(move);
-            } else {
-                int move = negamax_predict(table, ai).move;
-                if (move != -1) {
-                    table[move] = turn;
-                    record_move(move);
-                }
             }
+            turn = turn == 'X' ? 'O' : 'X';
         }
-        turn = turn == 'X' ? 'O' : 'X';
+        print_moves();
     }
-    print_moves();
 
     return ok;
 }
