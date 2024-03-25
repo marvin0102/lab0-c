@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp */
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -1199,20 +1200,48 @@ int get_input(char player)
     return GET_INDEX(y, x);
 }
 
-struct termios orig_termios;
+struct editorConfig {
+    int cx, cy;
+    struct termios orig_termios;
+};
+struct editorConfig E;
+
+struct abuf {
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT \
+    {             \
+        NULL, 0   \
+    }
+
+void abAppend(struct abuf *ab, const char *s, int len)
+{
+    char *new = realloc(ab->b, ab->len + len);
+    if (new == NULL)
+        return;
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+void abFree(struct abuf *ab)
+{
+    free(ab->b);
+}
 
 void disableRawMode()
 {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
 }
+
 void enableRawMode()
 {
-    tcgetattr(STDIN_FILENO, &orig_termios);
+    tcgetattr(STDIN_FILENO, &E.orig_termios);
+    struct termios raw = E.orig_termios;
     atexit(disableRawMode);
-    struct termios raw = orig_termios;
     raw.c_iflag &= ~(IXON);
     raw.c_lflag &= ~(ECHO | ICANON);
-    raw.c_lflag &= ~(ECHO);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 1;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
@@ -1222,6 +1251,34 @@ void die(const char *s)
 {
     perror(s);
     exit(1);
+}
+
+
+int getCursorPosition(int *rows, int *cols)
+{
+    char buf[32];
+    unsigned int i = 0;
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
+        return -1;
+    while (i < sizeof(buf) - 1) {
+        if (read(STDIN_FILENO, &buf[i], 1) != 1)
+            break;
+        if (buf[i] == 'R')
+            break;
+        i++;
+    }
+    buf[i] = '\0';
+    if (buf[0] != '\x1b' || buf[1] != '[')
+        return -1;
+    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2)
+        return -1;
+    return 0;
+}
+
+void initEditor()
+{
+    E.cx = 0;
+    E.cy = 0;
 }
 
 char editorReadKey()
@@ -1297,6 +1354,41 @@ void keyboard_task()
     preempt_enable();
 }
 
+void editorDrawRows(struct abuf *ab)
+{
+    time_t now = time(NULL);
+    struct tm *currtime;
+    currtime = localtime(&now);
+
+    abAppend(ab, "\x1b[2K", 4);
+    char r_status[80];
+    int r_len = snprintf(r_status, sizeof(r_status), "[ %2d:%2d:%2d ]",
+                         currtime->tm_hour, currtime->tm_min, currtime->tm_sec);
+    abAppend(ab, r_status, r_len);
+}
+
+void editorRefreshScreen()
+{
+    struct abuf ab = ABUF_INIT;
+
+    preempt_disable();
+    getCursorPosition(&E.cy, &E.cx);
+    preempt_enable();
+
+    char buf[32];
+
+    preempt_disable();
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, 0);
+    abAppend(&ab, buf, strlen(buf));
+    editorDrawRows(&ab);
+    preempt_enable();
+
+    preempt_disable();
+    assert(write(STDOUT_FILENO, ab.b, ab.len));
+    abFree(&ab);
+    preempt_enable();
+}
+
 static void ai_game(char *table)
 {
     /* Enable raw mode in terminal and non-blocking read */
@@ -1325,6 +1417,7 @@ static void ai_game(char *table)
             task_add(keyboard_task, "");
             task_add(negmax_task, &negamax_arg);
             task_add(keyboard_task, "");
+            task_add(editorRefreshScreen, "");
 
             while (!list_empty(&task_main.list) || !list_empty(&task_reap)) {
                 preempt_enable();
